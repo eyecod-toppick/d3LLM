@@ -13,6 +13,7 @@ def main(
     block_length=32,
     output_dir="trajectory_output",
     max_data_num=-1,
+    save_interval=10,
 ):
     """Distributed trajectory generation for DREAM using multiple GPUs across multiple nodes"""
 
@@ -20,15 +21,15 @@ def main(
     # SLURM_PROCID: global rank (0 to num_gpus-1)
     # SLURM_LOCALID: local GPU ID on this node (0-3)
     # SLURM_NTASKS: total number of tasks (should equal num_gpus)
+
+    rank = int(os.environ.get("RANK"))
+    local_rank = int(os.environ.get("LOCAL_RANK"))
+    world_size = int(os.environ.get("WORLD_SIZE"))
     
-    slurm_procid = int(os.environ.get("SLURM_PROCID", "0"))
-    slurm_localid = int(os.environ.get("SLURM_LOCALID", "0"))
-    slurm_ntasks = int(os.environ.get("SLURM_NTASKS", str(num_gpus)))
-    
-    print(f"Task {slurm_procid}/{slurm_ntasks}, Local GPU {slurm_localid}")
+    print(f"Task {rank}/{world_size}, Local GPU {local_rank}")
     
     # Only the first task does dataset loading and final concatenation
-    if slurm_procid == 0:
+    if rank == 0:
         # Load dataset to get total size
         dataset = load_dataset("Zigeng/dParallel_Dream_Distill_Data", split="train")
         # dataset = load_dataset("coder_data/Ling-Coder-dParallel-merged-512-120k", split="train")
@@ -59,15 +60,19 @@ def main(
     
     # Calculate this task's chunk
     chunk_size = (total_size + num_gpus - 1) // num_gpus
-    gpu_id = slurm_procid  # Use global rank as gpu_id
+    gpu_id = rank  # Use global rank as gpu_id
     start_idx = gpu_id * chunk_size
     end_idx = min((gpu_id + 1) * chunk_size, total_size)
     output_file = os.path.join(output_dir, f"trajectory_part_{gpu_id}.json")
 
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    d3llm_root = os.path.abspath(os.path.join(script_dir, '../../..'))
+    partly_script = os.path.join(script_dir, 'd3llm_dream_generate_partly.py')
+
     # Run generation on this GPU
     cmd = [
         "python",
-        "d3llm/d3llm_DREAM/distill_1_data_prepare/d3llm_dream_generate_partly.py",
+        partly_script,
         "--start_idx",
         str(start_idx),
         "--end_idx",
@@ -82,11 +87,13 @@ def main(
         output_file,
         "--max_data_num",
         str(max_data_num),
+        "--save_interval",
+        str(save_interval)
     ]
 
     env = os.environ.copy()
     # Use local GPU ID
-    env["CUDA_VISIBLE_DEVICES"] = str(slurm_localid)
+    env["CUDA_VISIBLE_DEVICES"] = str(local_rank)
 
     print(f"GPU {gpu_id}: Processing indices {start_idx}-{end_idx}")
     result = subprocess.run(cmd, env=env)
@@ -104,7 +111,7 @@ def main(
         f.write("done")
     
     # Only task 0 does concatenation
-    if slurm_procid == 0:
+    if rank == 0:
         print("Waiting for all tasks to complete...")
         # Wait for all completion flags
         while True:
@@ -136,7 +143,7 @@ def main(
             "idx": [d["idx"] for d in all_data],
             "question": [d["question"] for d in all_data],
             "prompt_ids": [d["prompt_ids"] for d in all_data],
-            "trajectory": [d["trajectory"] for d in all_data],
+            # "trajectory": [d["trajectory"] for d in all_data],
             "final_output": [d["final_output"] for d in all_data],
             "generated_text": [d["generated_text"] for d in all_data],
             "llm_answer": [d["llm_answer"] for d in all_data],
@@ -173,6 +180,8 @@ if __name__ == "__main__":
         default=-1,
         help="Max number of samples to generate (-1 for no limit)",
     )
+    parser.add_argument("--save_interval", type=int, default=10,
+                    help="Interval (in steps) to save intermediate results")
     args = parser.parse_args()
 
     main(
@@ -182,4 +191,5 @@ if __name__ == "__main__":
         args.block_length,
         args.output_dir,
         args.max_data_num,
+        save_interval=args.save_interval
     )

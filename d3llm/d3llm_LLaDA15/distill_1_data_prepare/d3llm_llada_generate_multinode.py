@@ -61,7 +61,7 @@ def main(
     
     # Only the first task does dataset loading and final concatenation
 
-    # import json
+    import json
     current_size = 0
     # with open("/sensei-fs-3/users/hyou/wei/d3LLM/d3llm/d3llm_LLaDA/distill_1_data_prepare/trajectory_output/trajectory_part_5.json", "r") as f:
     #     current_size = len(json.load(f))
@@ -69,7 +69,7 @@ def main(
     dataset = load_dataset("Zigeng/dParallel_LLaDA_Distill_Data", split="train")
     if rank == 0:
         # Load dataset to get total size
-        total_size = (len(dataset) // 8) * 7
+        total_size = len(dataset)
 
         # Apply max_data_num limit
         if max_data_num > 0:
@@ -84,7 +84,7 @@ def main(
         print(f"Total dataset size: {total_size}")
         print(f"Distributing across {world_size} processes (num_gpus={num_gpus})")
 
-    current_size += (len(dataset) // 8)
+    # current_size += 5 * (len(dataset) // 8)
     
     # Barrier: wait for task 0 to write total_size
     # In SLURM with srun, we can use a simple file-based barrier

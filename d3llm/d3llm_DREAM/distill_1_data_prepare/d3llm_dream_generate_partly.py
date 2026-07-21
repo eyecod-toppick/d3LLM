@@ -22,10 +22,12 @@ import re
 import types
 from typing import Optional
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add d3LLM root to path so we can import utils
+script_file = os.path.abspath(__file__)
+# Go up 4 levels: distill_1_data_prepare -> d3llm_LLaDA -> d3llm -> wei -> (parent) d3LLM
+d3llm_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(script_file))))
+sys.path.insert(0, d3llm_root)
 sys.path.append('/')
-sys.path.append('./')
-sys.path.append('../')
 
 from transformers import AutoTokenizer, AutoModel
 import torch
@@ -244,7 +246,7 @@ def generate_teacher_model_trajectory(
                     x[transfer_index] = x_[transfer_index].clone()
 
                 # Store trajectory after each step
-                trajectory.append(x.clone())
+                # trajectory.append(x.clone())
 
                 if (x[:, current_block_start:current_block_end] == mask_token_id_val).sum() == 0:
                     break
@@ -283,7 +285,7 @@ def generate_teacher_model_trajectory(
         # Restore original _sample method
         model._sample = original_sample
     
-    return final_output, trajectory, nfe
+    return final_output, nfe
 
 
 def main(
@@ -294,6 +296,7 @@ def main(
     block_length=32,
     output_file="trajectory_data.json",
     max_data_num=-1,
+    save_interval=10,
 ):
     from datasets import load_dataset
     from tqdm import tqdm
@@ -323,8 +326,20 @@ def main(
         end_idx = min(end_idx, start_idx + max_data_num)
 
     results = []
+    # If there is already output file, load existing results to avoid overwriting
+    if os.path.exists(output_file):
+        with open(output_file, "r") as f:
+            results = json.load(f)
+    start_idx = start_idx + len(results)  # Resume from last saved index
     total_count = 0
     incorrect_count = 0
+
+    def save_results_to_file():
+        """Periodically save results to JSON file"""
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        with open(output_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"[Auto-save] Saved {len(results)} trajectories to {output_file}", flush=True)
     
     for idx in tqdm(
         range(start_idx, min(end_idx, len(dataset))), desc="Generating trajectories"
@@ -355,7 +370,7 @@ def main(
             current_temperature = attempt * 0.1
             
             # Generate trajectory
-            final_output, trajectory, nfe = generate_teacher_model_trajectory(
+            final_output, nfe = generate_teacher_model_trajectory(
                 teacher_model,
                 tokenizer,
                 input_ids,
@@ -380,20 +395,21 @@ def main(
             print(f"Attempt {attempt + 1}/{max_attempts} failed for idx {idx} (temperature={current_temperature:.1f}), retrying...", flush=True)
 
         # Store result: convert tensors to lists for JSON serialization
-        results.append(
-            {
-                "idx": idx,
-                "question": prompt_text,
-                "prompt_ids": prompt_ids,
-                "trajectory": [traj[0].cpu().tolist() for traj in trajectory],
-                "final_output": final_output[0].cpu().tolist(),
-                "generated_text": generated_text,
-                "llm_answer": llm_answer,
-                "gt_answer": ground_truth,
-                "is_correct": is_correct,
-                "nfe": nfe,
-            }
-        )
+        if is_correct:
+            results.append(
+                {
+                    "idx": idx,
+                    "question": prompt_text,
+                    "prompt_ids": prompt_ids,
+                    # "trajectory": [traj[0].cpu().tolist() for traj in trajectory],
+                    "final_output": final_output[0].cpu().tolist(),
+                    "generated_text": generated_text,
+                    "llm_answer": llm_answer,
+                    "gt_answer": ground_truth,
+                    "is_correct": is_correct,
+                    "nfe": nfe,
+                }
+            )
         
         # Update statistics and print real-time status
         total_count += 1
@@ -409,12 +425,13 @@ def main(
                 f"Total: {total_count} | Correct: {correct_count} ({accuracy:.2f}%) | "
                 f"Incorrect: {incorrect_count} ({error_rate:.2f}%)", flush=True)
 
-    # Save results
-    with open(output_file, "w") as f:
-        json.dump(results, f)
+        # Periodically save results to avoid losing progress if interrupted
+        if total_count % save_interval == 0:
+            save_results_to_file()
 
-    print(f"Saved {len(results)} trajectories to {output_file}")
-
+    # Final save
+    save_results_to_file()
+    print(f"Generation complete. Saved {len(results)} trajectories to {output_file}")
 
 if __name__ == "__main__":
     import argparse
@@ -432,6 +449,8 @@ if __name__ == "__main__":
         default=-1,
         help="Max number of samples to generate (-1 for no limit)",
     )
+    parser.add_argument("--save_interval", type=int, default=10,
+                    help="Interval (in samples) to save intermediate results")
     args = parser.parse_args()
 
     main(
@@ -442,4 +461,5 @@ if __name__ == "__main__":
         args.block_length,
         args.output_file,
         args.max_data_num,
+        save_interval=args.save_interval
     )

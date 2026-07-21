@@ -311,7 +311,7 @@ def main(
 
     teacher_model = (
         LLaDAModelLM.from_pretrained(
-            "GSAI-ML/LLaDA-8B-Instruct",
+            "GSAI-ML/LLaDA-1.5",
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         )
@@ -319,7 +319,7 @@ def main(
         .eval()
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        "GSAI-ML/LLaDA-8B-Instruct", trust_remote_code=True
+        "GSAI-ML/LLaDA-1.5", trust_remote_code=True
     )
 
     dataset = load_dataset("Zigeng/dParallel_LLaDA_Distill_Data", split="train")
@@ -357,7 +357,7 @@ def main(
 
         # Retry mechanism: try up to 5 times if answer is incorrect
         # Temperature increases: 0.0, 0.1, 0.2, 0.3, 0.4
-        max_attempts = 2
+        max_attempts = 3
         for attempt in range(max_attempts):
             current_temperature = attempt * 0.1
             
